@@ -1,6 +1,6 @@
 // @ts-nocheck
 import NETWORK from 'constants/NetworkConstants';
-import { dummyPrivateTransfer, dummyToPrivate, dummyToPublic } from 'constants/DummyTransactions';
+import { dummyPrivateTransfer, dummyPublicAddress, dummyToPrivate, dummyToPublic } from 'constants/DummyTransactions';
 import { bnToU8a } from '@polkadot/util';
 import BN from 'bn.js';
 import { useConfig } from 'contexts/configContext';
@@ -11,7 +11,7 @@ import { useSubstrate } from 'contexts/substrateContext';
 import { useTxStatus } from 'contexts/txStatusContext';
 import { useActive } from 'hooks/useActive';
 import PropTypes from 'prop-types';
-import React, { useContext, useEffect, useReducer, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useReducer, useState } from 'react';
 import AssetType from 'types/AssetType';
 import Balance from 'types/Balance';
 import { HISTORY_EVENT_STATUS } from 'types/TxHistoryEvent';
@@ -32,8 +32,7 @@ export const SendContextProvider = (props) => {
   const privateWallet = usePrivateWallet();
   const {
     isReady: privateWalletIsReady,
-    privateAddress,
-    txFee
+    privateAddress
   } = privateWallet;
   const [state, dispatch] = useReducer(sendReducer, buildInitState(config));
   const isActive = useActive();
@@ -372,6 +371,9 @@ export const SendContextProvider = (props) => {
     if (!senderAssetCurrentBalance || !senderNativeTokenPublicBalance) {
       return null;
     }
+    if (!feeEstimate && senderIsPublic()) {
+      return null;
+    }
     if (senderAssetType.isNativeToken && !senderAssetType.isPrivate) {
       const reservedNativeTokenBalance = getReservedNativeTokenBalance();
       const zeroBalance = new Balance(senderAssetType, new BN(0));
@@ -434,7 +436,9 @@ export const SendContextProvider = (props) => {
 
   // Checks if the user has enough funds to pay for a transaction
   const userHasSufficientFunds = () => {
+    const maxSendableBalance = getMaxSendableBalance();
     if (
+      !maxSendableBalance ||
       !senderAssetTargetBalance ||
       !senderAssetCurrentBalance ||
       !senderNativeTokenPublicBalance
@@ -446,7 +450,6 @@ export const SendContextProvider = (props) => {
     ) {
       return null;
     }
-    const maxSendableBalance = getMaxSendableBalance();
     return maxSendableBalance.gte(senderAssetTargetBalance);
   };
 
@@ -647,15 +650,89 @@ export const SendContextProvider = (props) => {
     }
   };
 
+  const isToPrivate = useCallback(() => {
+    return !senderAssetType?.isPrivate && receiverAssetType?.isPrivate;
+  }, [senderAssetType, receiverAssetType]);
+
+  const isToPublic = useCallback(() => {
+    return senderAssetType?.isPrivate && !receiverAssetType?.isPrivate;
+  }, [senderAssetType, receiverAssetType]);
+
+  const isPrivateTransfer = useCallback(() => {
+    return senderAssetType?.isPrivate && receiverAssetType?.isPrivate;
+  }, [senderAssetType, receiverAssetType]);
+
+  const isPublicTransfer = useCallback(() => {
+    return !senderAssetType?.isPrivate && !receiverAssetType?.isPrivate;
+  }, [senderAssetType, receiverAssetType]);
+
+  const senderIsPrivate = useCallback(() => {
+    return isPrivateTransfer() || isToPublic();
+  }, [isPrivateTransfer, isToPublic]);
+
+  const senderIsPublic = useCallback(() => {
+    return isPublicTransfer() || isToPrivate();
+  }, [isPublicTransfer, isToPrivate]);
+
+  const receiverIsPrivate = useCallback(() => {
+    return isPrivateTransfer() || isToPrivate();
+  }, [isPrivateTransfer, isToPrivate]);
+
+  const receiverIsPublic = useCallback(() => {
+    return isPublicTransfer() || isToPublic();
+  }, [isPublicTransfer, isToPublic]);
+
+  const transactionType = useMemo(() => {
+    if (isPrivateTransfer()) {
+      return 'privateToPrivate';
+    } else if (isPublicTransfer()) {
+      return 'publicTransfer';
+    } else if (isToPrivate()) {
+      return 'publicToPrivate';
+    } else if (isToPublic()) {
+      return 'privateToPublic';
+    }
+  }, [isPrivateTransfer, isPublicTransfer, isToPrivate, isToPublic]);
+
   useEffect(() => {
-    const getFeeEstimate = async () => {
-      if (!api || !externalAccount || !senderAssetType || !receiverAssetType) {
-        return;
+    const getInternalTransferFees = async (batchCount) => {
+      const internalTransferCount = batchCount - 1;
+      if (internalTransferCount < 1) {
+        return Balance.Native(config, new BN(0));
       }
+      const dummyInternalTransfer = api.tx(dummyToPrivate);
+      const paymentInfo = await dummyInternalTransfer.paymentInfo(dummyPublicAddress);
+      const internalTransferFee = Balance.Native(
+        config,
+        new BN(paymentInfo.partialFee.toString())
+      );
+      return internalTransferFee.mul(new BN(internalTransferCount));
+    };
+
+    const applyFeeEstimateBatchAdjustment = async (feeEstimate) => {
+      if (
+        privateWallet
+        && privateWallet.estimateTransactionBatchCount
+        && senderAssetTargetBalance
+        && senderAssetCurrentBalance
+        && senderAssetTargetBalance.lte(senderAssetCurrentBalance)
+      ) {
+        const batchCount = await privateWallet.estimateTransactionBatchCount(
+          senderAssetTargetBalance,
+          transactionType
+        );
+        if (batchCount) {
+          const internalTransferFee = await getInternalTransferFees(batchCount);
+          return feeEstimate.add(internalTransferFee);
+        }
+      }
+      return null;
+    };
+
+    const getFeeEstimateTx = async () => {
       let tx = null;
       if (isPublicTransfer()) {
-        const dummyTxAddress = 'dmyHk98WvfPxoZhLH1HBe7si5AjaGgdSeYDcWDgYFExrxroMP';
-        tx = await buildPublicTransfer(Balance.Native(config, new BN(1)), dummyTxAddress);
+        tx = await buildPublicTransfer(Balance.Native(config, new BN(1)), dummyPublicAddress);
       } else if (isToPrivate()) {
         tx = api.tx(dummyToPrivate);
       } else if (isPrivateTransfer()) {
@@ -663,51 +740,47 @@ export const SendContextProvider = (props) => {
       } else if (isToPublic()) {
         tx = api.tx(dummyToPublic);
       }
-      if (tx) {
-        const paymentInfo = await tx.paymentInfo(externalAccount);
-        const feeEstimate = Balance.Native(config, new BN(paymentInfo.partialFee.toString()));
-        dispatch({
-          type: SEND_ACTIONS.SET_FEE_ESTIMATE,
-          feeEstimate,
-          senderAssetType,
-          receiverAssetType
-        });
+      return tx;
+    };
+
+    const getFeeEstimate = async () => {
+      console.log('getFeeEstimate');
+      if (!api || !externalAccount || !senderAssetType || !receiverAssetType) {
+        return;
       }
+      const tx = await getFeeEstimateTx();
+      if (!tx) {
+        return;
+      }
+      const paymentInfo = await tx.paymentInfo(externalAccount);
+      let feeEstimate = Balance.Native(config, new BN(paymentInfo.partialFee.toString()));
+      if (senderIsPrivate()) {
+        feeEstimate = await applyFeeEstimateBatchAdjustment(feeEstimate);
+      }
+      dispatch({
+        type: SEND_ACTIONS.SET_FEE_ESTIMATE,
+        feeEstimate,
+        senderAssetType,
+        receiverAssetType
+      });
     };
     getFeeEstimate();
-  }, [externalAccount, api, config, senderAssetType, receiverAssetType]);
+  }, [
+    api,
+    privateAddress,
+    senderAssetType,
+    receiverAssetType,
+    externalAccount,
+    transactionType,
+    senderAssetTargetBalance,
+    senderAssetCurrentBalance,
+    isToPrivate,
+    isToPublic,
+    isPrivateTransfer,
+    isPublicTransfer,
+    senderIsPrivate,
+  ]);
 
-  const isToPrivate = () => {
-    return !senderAssetType?.isPrivate && receiverAssetType?.isPrivate;
-  };
-
-  const isToPublic = () => {
-    return senderAssetType?.isPrivate && !receiverAssetType?.isPrivate;
-  };
-
-  const isPrivateTransfer = () => {
-    return senderAssetType?.isPrivate && receiverAssetType?.isPrivate;
-  };
-
-  const isPublicTransfer = () => {
-    return !senderAssetType?.isPrivate && !receiverAssetType?.isPrivate;
-  };
-
-  const senderIsPrivate = () => {
-    return isPrivateTransfer() || isToPublic();
-  };
-
-  const senderIsPublic = () => {
-    return isPublicTransfer() || isToPrivate();
-  };
-
-  const receiverIsPrivate = () => {
-    return isPrivateTransfer() || isToPrivate();
-  };
-
-  const receiverIsPublic = () => {
-    return isPublicTransfer() || isToPublic();
-  };
 
   const value = {
     userHasSufficientFunds,

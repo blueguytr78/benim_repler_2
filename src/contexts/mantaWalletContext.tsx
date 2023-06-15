@@ -1,9 +1,10 @@
+import NETWORK from 'constants/NetworkConstants';
+import WALLET_NAME from 'constants/WalletConstants';
+import { dummyPrivateAddress, dummyPublicAddress } from 'constants/DummyTransactions';
 import { SubmittableExtrinsic } from '@polkadot/api/types';
 import { EventRecord, ExtrinsicStatus } from '@polkadot/types/interfaces';
 import { BN } from 'bn.js';
 import { WarningNotification } from 'components/NotificationContent';
-import NETWORK from 'constants/NetworkConstants';
-import WALLET_NAME from 'constants/WalletConstants';
 import { useKeyring } from 'contexts/keyringContext';
 import { Notification } from 'element-react';
 import {
@@ -28,7 +29,7 @@ import { removePendingTxHistoryEvent } from 'utils/persistence/privateTransactio
 import { getLastAccessedWallet } from 'utils/persistence/walletStorage';
 import { useConfig } from './configContext';
 import { useGlobal } from './globalContexts';
-import { PrivateWallet } from './mantaWalletType';
+import { PrivateTransactionType, PrivateWallet } from './mantaWalletType';
 import { usePublicAccount } from './publicAccountContext';
 import { useSubstrate } from './substrateContext';
 import { useTxStatus } from './txStatusContext';
@@ -54,7 +55,7 @@ type MantaWalletContext = {
   privateWallet: PrivateWallet | null;
   sync: () => Promise<void>;
   isInitialSync: MutableRefObject<boolean>;
-  txFee: MutableRefObject<Balance | null>;
+  estimateTransactionBatchCount: (_: Balance, ___: PrivateTransactionType) => Promise<number | null>;
 };
 
 const MantaWalletContext = createContext<MantaWalletContext | null>(null);
@@ -79,7 +80,6 @@ export const MantaWalletContextProvider = ({
   const [privateWallet, setPrivateWallet] = useState<PrivateWallet | null>(
     null
   );
-
   const [isReady, setIsReady] = useState<boolean>(false);
   const signerIsConnected = !!privateWallet?.getZkBalance;
 
@@ -95,9 +95,16 @@ export const MantaWalletContextProvider = ({
   const { mantaWalletInitialSync, setMantaWalletInitialSync } = useGlobal();
 
   // transaction state
-  const txFee = useRef<Balance | null>(null);
   const txQueue = useRef<SubmittableExtrinsic<'promise', any>[]>([]);
   const finalTxResHandler = useRef<txResHandlerType<any> | null>(null);
+
+  const walletNetworkIsActive = useRef(false);
+
+  useEffect(() => {
+    walletNetworkIsActive.current = window.location.pathname.includes(
+      config.NETWORK_NAME.toLowerCase()
+    );
+  });
 
   const getMantaWallet = useCallback(async () => {
     const substrateWallets = await getSubstrateWallets();
@@ -285,14 +292,6 @@ export const MantaWalletContextProvider = ({
     }
   };
 
-  const getTransactionFee = async (
-    transaction: SubmittableExtrinsic<'promise', any>
-  ) => {
-    const paymentInfo = await transaction.paymentInfo(externalAccount);
-    const feeAmount = new BN(paymentInfo.partialFee.toString());
-    return Balance.Native(config, feeAmount);
-  };
-
   const publishNextBatch = async () => {
     const sendExternal = async () => {
       try {
@@ -302,7 +301,6 @@ export const MantaWalletContextProvider = ({
           setTxStatus(TxStatus.failed(''));
           return;
         }
-        txFee.current = await getTransactionFee(lastTx);
         await lastTx.signAndSend(publicAddress, { nonce: -1 }, finalTxResHandler.current);
         setTxStatus(TxStatus.processing(null, lastTx.hash.toString()));
       } catch (e) {
@@ -435,6 +433,39 @@ export const MantaWalletContextProvider = ({
     [privateWallet, publicAddress, network, api]
   );
 
+  const estimateTransactionBatchCount = useCallback(
+    async (targetBalance: Balance, transactionType: PrivateTransactionType) => {
+      if (!privateWallet || !targetBalance) {
+        return null;
+      }
+      let address;
+      switch (transactionType) {
+      case 'privateToPublic':
+        address = dummyPublicAddress;
+        break;
+      case 'privateToPrivate':
+        address = dummyPrivateAddress;
+        break;
+      default:
+        return 1;
+      }
+      try {
+        const transferPostsCount = await privateWallet?.estimateTransferPostsCount(
+          {
+            network,
+            transactionType,
+            assetId: targetBalance.assetType.assetId.toString(),
+            amount: targetBalance.valueAtomicUnits.toString(),
+            zkAddressOrPolkadotAddress: address,
+          }
+        );
+        return Math.ceil(transferPostsCount / 2);
+      } catch (e) {
+        console.error('Error getting transaction batches count', e);
+        return null;
+      }
+    }, [privateWallet, externalAccount, network, privateAddress]);
+
   const value = useMemo(
     () => ({
       isReady,
@@ -449,9 +480,9 @@ export const MantaWalletContextProvider = ({
       sync,
       isInitialSync: { current: false },
       signerIsConnected,
-      txFee,
       mantaWalletVersion,
-      showChangeNetworkNotification
+      showChangeNetworkNotification,
+      estimateTransactionBatchCount
     }),
     [
       isReady,
@@ -467,9 +498,9 @@ export const MantaWalletContextProvider = ({
       sync,
       privateWallet,
       signerIsConnected,
-      txFee,
       mantaWalletVersion,
-      showChangeNetworkNotification
+      showChangeNetworkNotification,
+      estimateTransactionBatchCount
     ]
   );
 
