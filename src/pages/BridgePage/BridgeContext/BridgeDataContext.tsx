@@ -11,9 +11,9 @@ import { useConfig } from 'contexts/configContext';
 import { firstValueFrom } from 'rxjs';
 import { useTxStatus } from 'contexts/txStatusContext';
 import TxStatus from 'types/TxStatus';
+import { useActive } from 'hooks/useActive';
 import BRIDGE_ACTIONS from './bridgeActions';
 import bridgeReducer, { buildInitState } from './bridgeReducer';
-import { useActive } from 'hooks/useActive';
 
 const BridgeDataContext = React.createContext();
 
@@ -285,7 +285,7 @@ export const BridgeDataContextProvider = (props) => {
       const inputConfig = await firstValueFrom(inputConfigObservable);
       handleInputConfigChange(inputConfig);
     };
-    subscribeInputConfig();
+    // subscribeInputConfig();
   },[
     senderAssetType, senderAssetCurrentBalance, senderAssetTargetBalance,
     originAddress, destinationAddress, originChain, destinationChain, isApiInitialized

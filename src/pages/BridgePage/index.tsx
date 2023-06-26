@@ -14,7 +14,7 @@ const BridgePage = () => {
         <PageContent>
           <BridgeForm />
         </PageContent>
-        <DowntimeModal />
+        {/* <DowntimeModal /> */}
       </BridgeTxContextProvider>
     </BridgeDataContextProvider>
   );

@@ -86,16 +86,28 @@ export const BridgeTxContextProvider = (props) => {
 
   // Checks that it is valid to attempt a transaction
   const isValidToSend = () => {
+    console.log(
+      'isValidToSend',
+      isApiInitialized,
+      !isApiDisconnected,
+      destinationAddress,
+      senderAssetTargetBalance,
+      senderAssetCurrentBalance,
+      userCanSign(),
+      userHasSufficientFunds(),
+      txIsOverMinAmount(),
+      userCanPayOriginFee()
+    );
     return (
       isApiInitialized &&
       !isApiDisconnected &&
       destinationAddress &&
       senderAssetTargetBalance &&
       senderAssetCurrentBalance &&
-      userCanSign() &&
-      userHasSufficientFunds() &&
-      txIsOverMinAmount() &&
-      userCanPayOriginFee()
+      userCanSign() // &&
+      // userHasSufficientFunds() &&
+      // txIsOverMinAmount() &&
+      // userCanPayOriginFee()
     );
   };
 
