@@ -3,7 +3,7 @@
     "version": "6.0.7",
     "private": false,
     "dependencies": {
-        "@acala-network/api": "^4.1.6-29",
+        "@acala-network/api": "^5.0.2",
         "@acala-network/sdk-core": "^4.1.5",
         "@babel/preset-typescript": "^7.18.6",
         "@craco/craco": "^6.4.5",
